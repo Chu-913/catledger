@@ -102,6 +102,20 @@ async function main() {
   console.log('\n--- file:// 记账后 ---'); console.log(JSON.stringify(after));
   check('file:// 下记账成功并写入原生存储', after.rows === 1 && after.stored === 1 && /99\.00/.test(after.stat || ''), after);
 
+  // 笔记功能在 file:// 下也要能用（且写进原生存储）
+  await c.js(`document.querySelector('.note-card').click()`);
+  await sleep(500);
+  const noteSheet = await c.js(`!!document.querySelector('#nText')`);
+  check('file:// 下笔记弹层可打开', noteSheet === true);
+  await c.js(`(() => { const t = document.querySelector('#nText'); t.value = 'file 协议下的笔记'; t.dispatchEvent(new Event('input')); })()`);
+  await c.js(`document.querySelector('#nSave').click()`);
+  await sleep(650);
+  const noteSaved = await c.js(`(() => ({
+    text: (document.querySelector('.note-card .n-text') || {}).textContent,
+    stored: (JSON.parse(JSON.parse(sessionStorage.getItem('fake_native_fs') || '{}')['catledger.db.v1'] || '{}').notes || []).length
+  }))()`);
+  check('file:// 下笔记写入原生存储', /file 协议下的笔记/.test(noteSaved.text || '') && noteSaved.stored === 1, noteSaved);
+
   const errs = c.errors.filter(e => e && !/favicon/i.test(e));
   check('file:// 下无 JS 异常', errs.length === 0, errs.slice(0, 3));
 

@@ -4,10 +4,11 @@
 #
 # 注意：本机沙箱环境里 aapt2 只能用相对路径访问目录，因此构建全过程
 # 都在 build\ 目录下以相对路径执行，最后再把 APK 拷到 apk\。
+#
+# 版本号唯一来源是 android\AndroidManifest.xml 里的 versionCode / versionName，
+# 改版本只改那一处（aapt2 的 --version-* 参数不会覆盖清单里的值）。
 
 param(
-    [string]$VersionName = "1.0.0",
-    [int]$VersionCode = 1,
     [string]$KsPass = "catledger"
 )
 
@@ -65,6 +66,13 @@ Copy-Item $androidJar (Join-Path $Work 'android.jar') -Force
 $wwwSize = (Get-ChildItem (Join-Path $Work 'assets') -Recurse -File | Measure-Object Length -Sum).Sum
 Write-Host ("  前端资源 {0:N1} KB" -f ($wwwSize / 1KB))
 
+# 从清单里读版本号（唯一来源），用于产物命名
+$mfText = [System.IO.File]::ReadAllText((Join-Path $Work 'AndroidManifest.xml'), [System.Text.Encoding]::UTF8)
+$VersionCode = [int]([regex]::Match($mfText, 'android:versionCode="(\d+)"').Groups[1].Value)
+$VersionName = [regex]::Match($mfText, 'android:versionName="([^"]+)"').Groups[1].Value
+if (-not $VersionName) { Fail "清单里没有 android:versionName" }
+Write-Host ("  版本 {0} (versionCode {1})" -f $VersionName, $VersionCode)
+
 Push-Location $Work
 try {
     # ---------- 2. 资源 ----------
@@ -85,8 +93,6 @@ try {
         -A assets `
         --min-sdk-version 24 `
         --target-sdk-version 34 `
-        --version-code $VersionCode `
-        --version-name $VersionName `
         --auto-add-overlay `
         $flatFiles
     if ($LASTEXITCODE -ne 0) { Fail "aapt2 link 失败" }

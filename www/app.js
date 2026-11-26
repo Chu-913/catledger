@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 /* =========================================================
    分类账 CatLedger — 应用逻辑
    数据全部存在本机（localStorage），无网络请求、无账号。
@@ -53,7 +53,8 @@ const inputVal = d => d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.
 /* ---------------- 2. 数据层 ---------------- */
 const KEY = 'catledger.db.v1';
 const BAK = 'catledger.db.v1.bak';
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
+const NOTE_MAX = 500;          // 一篇笔记最多 500 字，够写一段比较和感受
 
 /* 存储适配层：APK 里优先用原生文件存储（原子写入，不依赖 WebView 的 localStorage），
    浏览器里退回 localStorage。 */
@@ -79,7 +80,7 @@ const store = {
 
 function emptyDB() {
   return {
-    version: 1, categories: [], entries: [],
+    version: 1, categories: [], entries: [], notes: [],
     settings: { theme: 'auto', compactList: false, showColors: true, homeCollapsed: false, lastDir: {} }
   };
 }
@@ -111,6 +112,25 @@ function normalize(o) {
       updatedAt: e.updatedAt || e.at || toLocalIso(new Date()),
       deletedAt: e.deletedAt || null
     }));
+  /* 笔记：一个分类一个月一篇，同一月有多条时只留最后更新的那条 */
+  const seenNote = new Set();
+  d.notes = (Array.isArray(o.notes) ? o.notes : [])
+    .filter(n => n && ids.has(n.catId) && Number.isFinite(+n.ym) && String(n.text || '').trim())
+    .map(n => ({
+      id: n.id || uid('n_'),
+      catId: n.catId,
+      ym: Math.round(+n.ym),
+      text: String(n.text).slice(0, NOTE_MAX),
+      createdAt: n.createdAt || toLocalIso(new Date()),
+      updatedAt: n.updatedAt || n.createdAt || toLocalIso(new Date())
+    }))
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    .filter(n => {
+      const k = n.catId + ':' + n.ym;
+      if (seenNote.has(k)) return false;
+      seenNote.add(k);
+      return true;
+    });
   d.settings = Object.assign(d.settings, o.settings || {});
   if (!d.settings.lastDir || typeof d.settings.lastDir !== 'object') d.settings.lastDir = {};
   return d;
@@ -248,6 +268,22 @@ function catMonth(catId, ym) {
   return { inSum, outSum, count };
 }
 
+/* ---- 每月一篇笔记 ---- */
+const ymLabel = ym => Math.floor(ym / 100) + '年' + (ym % 100) + '月';
+const shortYm = ym => (ym % 100) + '月';
+const noteOf = (catId, ym) => db.notes.find(n => n.catId === catId && n.ym === ym) || null;
+const notesOfCat = catId => db.notes.filter(n => n.catId === catId).sort((a, b) => b.ym - a.ym);
+const firstLine = s => String(s).split('\n').find(x => x.trim()) || '';
+
+function fmtNoteStamp(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const now = new Date();
+  const yest = new Date(now); yest.setDate(now.getDate() - 1);
+  const day = sameDay(d, now) ? '今天' : sameDay(d, yest) ? '昨天' : (d.getMonth() + 1) + '月' + d.getDate() + '日';
+  return day + ' ' + fmtTime(d) + ' 更新';
+}
+
 function cardHTML(c, ym) {
   const s = catMonth(c.id, ym);
   const inc = c.defaultDir === 'in';
@@ -258,8 +294,9 @@ function cardHTML(c, ym) {
   const secondary = [s.count + ' 笔', other ? (inc ? '支出 ' : '收入 ') + yuan(other) : '']
     .filter(Boolean).join(' · ');
   const act = ui.editHome ? 'edit-cat' : 'open-cat';
+  const hasNote = !!noteOf(c.id, ym);
   return `<div class="cat-card" role="button" tabindex="0" data-act="${act}" data-id="${c.id}">
-    <div class="head"><span class="emoji">${esc(c.emoji)}</span><span class="name">${esc(c.name)}</span></div>
+    <div class="head"><span class="emoji">${esc(c.emoji)}</span><span class="name">${esc(c.name)}</span>${hasNote ? '<span class="n-dot" aria-label="本月有笔记">📝</span>' : ''}</div>
     <div class="body"><div class="line1">${primary}</div><div class="line2">${secondary}</div></div>
     ${ui.editHome ? `<div class="card-tools">
         <button data-act="move-up" data-id="${c.id}" aria-label="上移">↑</button>
@@ -385,6 +422,31 @@ function viewCat(id) {
     })()
     : '';
 
+  const n = r.mode === 'month' ? noteOf(c.id, r.ym) : null;
+  const allNotes = r.mode === 'all' ? notesOfCat(c.id) : [];
+
+  const noteHTML = r.mode !== 'month' ? '' : (n
+    ? `<section class="note-card" data-act="note-open" data-id="${c.id}">
+         <div class="n-head"><span class="n-ttl">${shortYm(r.ym)}笔记</span><span class="n-edit">编辑</span></div>
+         <div class="n-text">${esc(n.text)}</div>
+         <div class="n-meta">${fmtNoteStamp(n.updatedAt)}</div>
+       </section>`
+    : `<section class="note-card empty" data-act="note-open" data-id="${c.id}">
+         <div class="n-head"><span class="n-ttl">${shortYm(r.ym)}笔记</span><span class="n-edit">写一篇</span></div>
+         <div class="n-ph">这个月想记点什么？比如「多买了一箱苹果」</div>
+       </section>`);
+
+  const notesHTML = (r.mode === 'all' && allNotes.length)
+    ? `<div class="notes-sec">
+         <div class="n-sec-head">笔记 <span>${allNotes.length} 篇</span></div>
+         ${allNotes.map(x => `<button class="n-item" data-act="note-edit" data-id="${c.id}" data-ym="${x.ym}">
+             <span class="ym">${ymLabel(x.ym)}</span>
+             <span class="tx">${esc(firstLine(x.text))}</span>
+             <span class="ar">›</span>
+           </button>`).join('')}
+       </div>`
+    : '';
+
   return `<div class="screen">
     <header class="topbar">
       <button class="icon-btn" data-act="back" aria-label="返回">‹</button>
@@ -420,6 +482,7 @@ function viewCat(id) {
       </div>` : ''}
     </div>
 
+    ${noteHTML}${notesHTML}
     <div class="list">${listHTML}</div>
     <button class="fab" data-act="add-entry" data-id="${c.id}" aria-label="记一笔">＋</button>
   </div>`;
@@ -779,6 +842,72 @@ function openCatPicker(currentId, onPick) {
 }
 
 /* ---------------- 13. 分类编辑 ---------------- */
+/* ---------------- 13. 笔记弹层 ----------------
+   每个分类、每个月一篇，写在分类详情里，跟着月份切换。 */
+function openNoteSheet(catId, ym) {
+  const c = getCat(catId);
+  if (!c) return;
+  const exist = noteOf(catId, ym);
+  const html = `<div class="grabber"></div>
+    <div class="sheet-head">
+      <div class="ttl">${esc(c.emoji)} ${esc(c.name)} · ${ymLabel(ym)}</div>
+      <button class="x" data-close="1">✕</button>
+    </div>
+    <div class="sheet-body">
+      <div class="note-form">
+        <textarea id="nText" maxlength="${NOTE_MAX}" placeholder="随便写：这个月买了什么、比上个月多花在哪、下个月想怎么改。">${esc(exist ? exist.text : '')}</textarea>
+        <div class="n-foot"><span id="nCount"></span><span>只存在这台手机</span></div>
+      </div>
+    </div>
+    <div class="sheet-foot">
+      <button class="primary" id="nSave">保存</button>
+      ${exist ? '<button class="danger-link" id="nDel">删除这篇笔记</button>' : ''}
+    </div>`;
+
+  const rec = mountSheet(html);
+  const el = rec.el;
+  const ta = el.querySelector('#nText');
+  const cnt = el.querySelector('#nCount');
+  const sync = () => { cnt.textContent = ta.value.length + ' / ' + NOTE_MAX; };
+  ta.addEventListener('input', sync);
+  sync();
+  el.querySelector('[data-close]').addEventListener('click', () => closeTop());
+
+  el.querySelector('#nSave').addEventListener('click', () => {
+    const text = ta.value.trim().slice(0, NOTE_MAX);
+    if (!text) {
+      if (!exist) { toast('写点什么再保存'); try { ta.focus(); } catch (e) { } return; }
+      removeNote(exist, () => closeTop());
+      return;
+    }
+    const now = toLocalIso(new Date());
+    if (exist) {
+      exist.text = text;
+      exist.updatedAt = now;
+    } else {
+      db.notes.push({ id: uid('n_'), catId, ym, text, createdAt: now, updatedAt: now });
+    }
+    save();
+    closeTop();
+    render();
+    toast(exist ? '笔记已更新' : '笔记已保存');
+  });
+
+  const del = el.querySelector('#nDel');
+  if (del) del.addEventListener('click', () => removeNote(exist, () => closeTop()));
+}
+
+function removeNote(note, after) {
+  confirmSheet('删除这篇笔记？', ymLabel(note.ym) + ' 的笔记会被清空，无法恢复。', '删除', true).then(ok => {
+    if (!ok) return;
+    db.notes = db.notes.filter(x => x.id !== note.id);
+    save();
+    if (after) after();
+    render();
+    toast('笔记已删除');
+  });
+}
+
 function openCatEditor(cat) {
   const isNew = !cat;
   const c = isNew
@@ -879,10 +1008,13 @@ function openCatEditor(cat) {
 
 function deleteCategory(cat) {
   const n = liveEntries().filter(e => e.catId === cat.id).length;
+  const nNotes = db.notes.filter(x => x.catId === cat.id).length;
+  const notePart = nNotes ? `，以及 ${nNotes} 篇笔记` : '';
   if (n === 0) {
-    confirmSheet('删除分类', `「${cat.name}」里没有账目，确定删除？`, '删除', true).then(ok => {
+    confirmSheet('删除分类', `「${cat.name}」里没有账目${notePart}，确定删除？`, '删除', true).then(ok => {
       if (!ok) return;
       db.categories = db.categories.filter(x => x.id !== cat.id);
+      db.notes = db.notes.filter(x => x.catId !== cat.id);
       save(); render(); toast('已删除');
     });
     return;
@@ -897,9 +1029,10 @@ function deleteCategory(cat) {
       const t = getCat(cat.id); if (t) t.archived = true;
       save(); render(); toast('已归档');
     } else if (v === 'purge') {
-      confirmSheet('确定删除？', `将永久删除「${cat.name}」和其中 ${n} 笔账，无法撤销。`, '删除', true).then(ok => {
+      confirmSheet('确定删除？', `将永久删除「${cat.name}」和其中 ${n} 笔账${notePart}，无法撤销。`, '删除', true).then(ok => {
         if (!ok) return;
         db.entries = db.entries.filter(e => e.catId !== cat.id);
+        db.notes = db.notes.filter(x => x.catId !== cat.id);
         db.categories = db.categories.filter(x => x.id !== cat.id);
         save(); render(); toast('已删除');
       });
@@ -908,6 +1041,20 @@ function deleteCategory(cat) {
       if (!targets.length) { toast('没有其他分类可接收'); return; }
       openCatPicker(cat.id, targetId => {
         db.entries.forEach(e => { if (e.catId === cat.id) e.catId = targetId; });
+        /* 笔记跟着走；目标分类同月已有笔记时，两段文字合并，不丢内容 */
+        const drop = [];
+        db.notes.forEach(x => {
+          if (x.catId !== cat.id) return;
+          const dup = db.notes.find(y => y !== x && y.catId === targetId && y.ym === x.ym);
+          if (dup) {
+            dup.text = (dup.text + '\n\n' + x.text).slice(0, NOTE_MAX);
+            dup.updatedAt = toLocalIso(new Date());
+            drop.push(x.id);
+          } else {
+            x.catId = targetId;
+          }
+        });
+        if (drop.length) db.notes = db.notes.filter(x => drop.indexOf(x.id) < 0);
         db.categories = db.categories.filter(x => x.id !== cat.id);
         save(); render(); toast('已迁移');
       });
@@ -1004,6 +1151,8 @@ document.addEventListener('click', ev => {
     case 'move-up': moveCat(id, -1); break;
     case 'move-down': moveCat(id, 1); break;
     case 'add-entry': openEntrySheet({ catId: id }); break;
+    case 'note-open': openNoteSheet(id, ui.range.ym); break;
+    case 'note-edit': openNoteSheet(id, Number(el.dataset.ym)); break;
     case 'edit-entry': {
       const e = db.entries.find(x => x.id === eid);
       if (e) openEntrySheet({ entry: e });
@@ -1121,6 +1270,11 @@ function seedDemo() {
   add(bus, 300, 'out', 0, 8, 10, '地铁');
   add(bus, 2600, 'out', 1, 9, 0, '打车去客户');
   add(bus, 300, 'out', 2, 18, 45, '地铁');
+  db.notes = [{
+    id: uid('n_'), catId: foods.id, ym: ymOf(now),
+    text: '这个月买了一箱苹果（60 块），水果比上个月多；外卖少点了两次，总体差不多。',
+    createdAt: toLocalIso(now), updatedAt: toLocalIso(now)
+  }];
   save();
 }
 

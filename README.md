@@ -1,7 +1,7 @@
 # 分类账 · CatLedger
 
-> **状态：v1.0.0 已构建完成**
-> 安装包：[`apk/catledger-1.0.0.apk`](apk/catledger-1.0.0.apk) · 61 KB · Android 7.0+（minSdk 24）· 零权限 · 完全离线
+> **状态：v1.1.0 已构建完成**
+> 安装包：[`apk/catledger-1.1.0.apk`](apk/catledger-1.1.0.apk) · 65 KB · Android 7.0+（minSdk 24）· 零权限 · 完全离线
 > 上手说明：[`使用手册.md`](使用手册.md)
 
 ---
@@ -10,7 +10,7 @@
 
 | 路径 | 说明 |
 |---|---|
-| `apk/catledger-1.0.0.apk` | 已签名、可安装的安装包（62,433 字节） |
+| `apk/catledger-1.1.0.apk` | 已签名、可安装的安装包（66,529 字节） |
 | `使用手册.md` | 装 + 用 + 备份的说明 |
 | `www/` | 界面与逻辑（纯 HTML/CSS/JS，零第三方依赖） |
 | `android/` | WebView 外壳（清单、资源、图标、`MainActivity.java`） |
@@ -18,7 +18,7 @@
 | `scripts/` | 下载构建工具、生成图标、自动化验收测试 |
 | `keystore/catledger.jks` | 自签名证书（**别删**，删了就没法覆盖升级） |
 
-> APK 校验值：`SHA256 631CD597266A0D9D08D0FF59D95D0C345E94D758F2381F8BE18F22B0A6467EC3`（62,433 字节）
+> APK 校验值：`SHA256 B5C763C84A96FC0920A874467953134FA42F46B8A1D8EC04869F610EBD9BF7B6`（66,529 字节）
 
 > **仓库里没有的两样东西**（都在 `.gitignore` 里）：
 > - `.sdk/`：约 231MB 的构建工具链，用 `node scripts/fetch-chunks.mjs` 可重新下载
@@ -34,6 +34,8 @@
 点进去才是这一类的账：顶部是收入/支出/结余，下面是按时间倒序的每一笔。
 
 时间维度没有消失，只是**从主导退到了类内排序**。
+
+v1.1 起，每个分类的每个月还能写**一篇笔记**：翻到 11 月，就写 11 月这一类的想法（"这个月多买了一箱苹果，比上月多花 60"）；翻回 10 月，看到的就是 10 月写的那篇。数字账之外，把"为什么"也留下来。
 
 ---
 
@@ -96,6 +98,12 @@
 │ ▓▓▓░░░░░░░ 本月预算 ¥2,000 已用 10%│
 ├──────────────────────────────┤
 │ [本月] [全部]        ‹ 11月 › │
+│ ┌──────────────────────────┐ │
+│ │ 11月笔记            编辑 │ │
+│ │ 这个月多买了一箱苹果，比   │ │
+│ │ 上个月多花 60。           │ │
+│ │ 今天 21:40 更新           │ │
+│ └──────────────────────────┘ │
 │ 今天 周四            支出 83.00│
 │  19:05  晚饭 外卖    -¥38.00  │
 │  12:30  午饭 牛肉面  -¥45.00  │
@@ -142,6 +150,9 @@
 | 空状态 | 首页无分类 → 引导建第一个；分类内无账目 → 提示记第一笔 |
 | 返回键 | 先关弹层 → 再退页面 → 首页才退出 App（`window.__back`） |
 | 金额显示 | 千分位 + 两位小数；收入 `+`、支出 `−`，同时用颜色和符号表达 |
+| 笔记 | 每个分类、每个月一篇，最多 500 字；同一月再写就是覆盖，不会堆积 |
+| 笔记可见范围 | 本月模式显示当前月份的笔记；「全部」模式按月份倒序列出这一类的所有笔记，点开可改 |
+| 笔记与分类 | 分类归档时笔记一起隐藏；删除分类会连笔记一起删（确认框里写明篇数）；迁移账目时笔记跟着走，目标分类同月已有笔记则两段文字合并 |
 
 ---
 
@@ -167,6 +178,12 @@
     "createdAt": "...", "updatedAt": "...",
     "deletedAt": null             // 软删除标记
   }],
+  "notes": [{
+    "id": "n_xxx", "catId": "c_xxx",
+    "ym": 202611,                 // 年月，一个分类一个月只保留一篇
+    "text": "这个月多买了一箱苹果，比上个月多花 60。",
+    "createdAt": "...", "updatedAt": "..."
+  }],
   "settings": {
     "theme": "auto",              // auto | light | dark
     "compactList": false,         // 不按天分组
@@ -178,6 +195,8 @@
 ```
 
 时间统一存带时区的 ISO 8601 字符串；分组时按本地时区切天。
+
+`notes` 里同一 `catId + ym` 只会有一条：`normalize()` 加载时会把历史遗留的重复月份按"最后更新"合并成一条，老版本（没有 `notes` 字段）的数据读进来就是空数组，不影响升级。
 
 ---
 
@@ -236,7 +255,7 @@
 - 返回键拦截 → 调页面 `window.__back()` → 返回 `false` 才 `finish()`
 - `configChanges` 接管 `uiMode`，切换深浅色不重建 Activity
 - 无 `INTERNET` 权限，`usesCleartextTraffic=false`，`shouldOverrideUrlLoading` 一律拦掉
-- 规格：`com.catledger.app` · minSdk 24 · targetSdk 34 · 62,433 字节
+- 规格：`com.catledger.app` · minSdk 24 · targetSdk 34 · 66,529 字节
 
 ### 8.3 桥接口契约（`window.AppBridge`）
 
@@ -267,23 +286,40 @@ python scripts/make-icons.py           # 生成 5 个密度的图标
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File build-apk.ps1
-# 产物: apk\catledger-1.0.0.apk
+# 产物: apk\catledger-1.1.0.apk（版本号取自 AndroidManifest.xml）
 ```
 
 流程：`aapt2 compile` → `aapt2 link` → `javac --release 8` → `d8` → 塞 `classes.dex` → `zipalign` → `apksigner`。
 全程约 5 秒，无需联网。
 
-### 9.3 构建时踩到的三个坑（已固化进脚本）
+### 9.3 推送到 GitHub
+
+本机 `git push` 到 `github.com:443` 会被网络拦掉（`Failed to connect after 21s`），但 `api.github.com` 通。
+所以用 Git Data API 走一遍等价流程：
+
+```powershell
+node scripts/push-github.mjs        # 把当前分支推上去
+node scripts/push-github.mjs -n     # 只演练，不写 ref
+```
+
+它做的事：`git ls-tree` 列出文件 → `POST /git/blobs`（校验 blob sha 一致）→ `POST /git/trees`（校验 tree sha 一致）
+→ `POST /git/commits`（parent = 远端 HEAD，作者/时间原样搬过去）→ `PATCH /git/refs/heads/<branch>`。
+最后还会核对远端生成的 commit sha 是否等于本地 HEAD，**不一致就报错停下**，避免本地历史和远端悄悄分叉。
+token 从 Windows 凭据管理器取，不落盘、不打印。
+
+### 9.4 构建时踩到的四个坑（已固化进脚本）
 
 1. **aapt2 只认相对路径。** 本机沙箱下用绝对路径会报 `failed to open directory`，所以脚本 `Push-Location build\` 之后全部用相对路径。
 2. **aapt2 会把 assets 子目录写成反斜杠。** 生成 `assets/www\app.js` 这种条目，WebView 按 `/` 找文件直接 404（装上就是白屏）。解决：前端资源摊平到 `assets/` 根目录，并在打包后断言"包内不能有反斜杠路径"。
 3. **`-I android.jar` 传中文绝对路径会静默失效。** aapt2 只打一行 warning，然后把 `windowLightStatusBar` 等属性**悄悄丢掉**（主题只剩 3 个属性）。解决：把 `android.jar` 拷进构建目录，`-I android.jar`。修复后 8 个属性全部解析。
+4. **`aapt2 link --version-code` 不会覆盖清单里的值。** 升版本改参数没用，`badging` 依旧显示旧版本。解决：版本号唯一来源写死在 `AndroidManifest.xml`，脚本从清单读出来给产物命名。
+5. （脚本自身）**`build-apk.ps1` 必须存成 UTF-8 带 BOM。** PowerShell 5.1 会把无 BOM 的 UTF-8 当 ANSI 读，中文注释被打乱后会连带把后面的引号配对搞坏，报一堆莫名其妙的语法错。
 
 ---
 
 ## 10. 验证记录
 
-### 自动化（Chrome DevTools Protocol 驱动，76 项全通过）
+### 自动化（Chrome DevTools Protocol 驱动，109 项全通过）
 
 | 套件 | 覆盖 | 结果 |
 |---|---|---|
@@ -291,11 +327,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-apk.ps1
 | `scripts/e2e2.mjs` | 浅色主题、新建分类字段落库、长按整理、↑↓ 排序、删除与撤销、导出 JSON、返回栈、刷新持久化 | 19/19 |
 | `scripts/e2e3.mjs` | 撤销条真实点击、备注聚焦收键盘、收入切换、两位小数、退格、0 元禁用 | 10/10 |
 | `scripts/e2e4.mjs` | **模拟 AppBridge**：空数据首启、系统深色、只写原生存储、重开后数据仍在、导出走原生剪贴板、状态栏联动 | 12/12 |
-| `scripts/e2e5.mjs` | **用 file:// 打开打包后的 assets**：CSS/JS 加载、弹层、建分类、记账、写入原生存储 | 9/9 |
+| `scripts/e2e5.mjs` | **用 file:// 打开打包后的 assets**：CSS/JS 加载、弹层、建分类、记账、笔记、写入原生存储 | 11/11 |
+| `scripts/e2e6.mjs` | **每月笔记**：卡片与空态、弹层读写、上下月切换、全部模式按月份倒序、删除确认、刷新持久化、首页 📝 标记联动、深色配色、小屏不溢出 | 31/31 |
 
 ### 产物校验
 
-- 包名/版本/label：`com.catledger.app` / `1.0.0` / `分类账`
+- 包名/版本/label：`com.catledger.app` / `1.1.0`（versionCode 2）/ `分类账`
 - 5 个密度图标全部被 `application-icon-160…640` 引用
 - 主题 `AppTheme` **8 个属性全部解析**（parent = `Theme.Material.Light.NoActionBar`）
 - `classes.dex` 含 `MainActivity`、`AppBridge`、`R` 等 12 个类
@@ -352,7 +389,7 @@ catledger/
 ├── README.md                  ← 本文
 ├── 使用手册.md
 ├── build-apk.ps1              一键打包
-├── apk/catledger-1.0.0.apk    产物
+├── apk/catledger-1.1.0.apk    产物
 ├── keystore/catledger.jks     签名证书（别删）
 ├── www/
 │   ├── index.html
